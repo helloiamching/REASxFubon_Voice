@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>音檔處理系統</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft JhengHei", sans-serif;
+            background:  #A0AEC4;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            color: #3A528B;
+            font-size: 32px;
+            margin-bottom: 20px;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .stat-card {
+            background: #9DCFC2;
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .stat-card:nth-child(1) { background: #3A528B; }
+        .stat-card:nth-child(2) { background: #2C728E; }
+        .stat-card:nth-child(3) { background: #20908C; }
+        .stat-card:nth-child(4) { background: #28AE7F; }
+
+        .stat-number {
+            font-size: 36px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .analytics-section {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+        }
+
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 30px;
+            margin-top: 20px;
+        }
+
+        .chart-container {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+        }
+
+        .chart-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #3A528B;
+            margin-bottom: 15px;
+        }
+
+        .upload-section {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+        }
+
+        .upload-area {
+            border: 3px dashed #3A528B;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .upload-area:hover {
+            background: #f8f9ff;
+            border-color: #28AE7F;
+        }
+
+        .upload-area.dragover {
+            background: #f0f4ff;
+            border-color: #28AE7F;
+            transform: scale(1.02);
+        }
+
+        .btn {
+            background: #9EBCC8
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.3s;
+            margin: 3px;
+            white-space: nowrap;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(58, 82, 139, 0.4);
+        }
+
+        .btn-view { background: #2C728E; }
+        .btn-download { background: #20908C; }
+        .btn-delete { background: #dc3545; }
+        .btn-excel { background: #28AE7F; }
+
+        .table-section {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            background: #A0AEC4;
+            color: white;
+            padding: 12px 10px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 14px;
+            position: sticky;
+            top: 0;
+        }
+
+        td {
+            padding: 12px 10px;
+            border-bottom: 1px solid #eee;
+            font-size: 13px;
+        }
+
+        tr:hover {
+            background: #f8f9ff;
+        }
+
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 15px;
+            font-size: 11px;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .status-completed {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-processing {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-failed {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status-waiting {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .message {
+            padding: 15px;
+            border-radius: 10px;
+            margin: 15px 0;
+            animation: slideIn 0.3s;
+        }
+
+        .message-success {
+            background: #d4edda;
+            color: #155724;
+            border-left: 4px solid #28a745;
+        }
+
+        .message-error {
+            background: #f8d7da;
+            color: #721c24;
+            border-left: 4px solid #dc3545;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateY(-20px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 3px;
+            flex-wrap: wrap;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .filename {
+            font-weight: 600;
+            color: #3A528B;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .cell-group {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>音檔處理系統</h1>
+            <div class="stats">
+                <div class="stat-card">
+                    <div class="stat-number">{{ stats.total }}</div>
+                    <div class="stat-label">總檔案數</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">{{ stats.completed }}</div>
+                    <div class="stat-label">已完成</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">{{ stats.processing }}</div>
+                    <div class="stat-label">處理中</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">{{ stats.failed }}</div>
+                    <div class="stat-label">失敗</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 統計圖表區域 -->
+        <div class="analytics-section">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 style="color: #3A528B; margin: 0;">數據分析</h2>
+                <button class="btn btn-delete" onclick="resetAnalytics()">清除數據分析</button>
+            </div>
+            <div class="charts-grid">
+                <div class="chart-container">
+                    <div class="chart-title">每日上傳次數（最近7天）</div>
+                    <canvas id="dailyChart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <div class="chart-title">今日每小時上傳次數</div>
+                    <canvas id="hourlyChart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <div class="chart-title">意圖分佈統計</div>
+                    <canvas id="intentChart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <div class="chart-title">按鈕點擊統計</div>
+                    <canvas id="buttonChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="upload-section">
+            <h2 style="margin-bottom: 20px; color: #333;">上傳音檔</h2>
+            <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
+                <p style="font-size: 20px; margin-bottom: 10px;">點擊或拖曳檔案至此處上傳</p>
+                <p style="color: #666;">支援格式：WAV, MP3, M4A (最大 500MB)</p>
+                <input type="file" id="fileInput" accept=".wav,.mp3,.m4a" onchange="uploadFile(this)">
+            </div>
+            <div id="message"></div>
+        </div>
+
+        <div class="table-section">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 style="color: #333;">處理紀錄</h2>
+                <button class="btn btn-excel" onclick="window.location.href='/download/excel'">下載 Excel 報表</button>
+            </div>
+            
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 180px;">音檔檔名</th>
+                        <th style="width: 130px;">上傳時間</th>
+                        <th style="width: 90px;">處理時間</th>
+                        <th style="width: 80px;">狀態</th>
+                        <th style="width: 100px;">分類</th>
+                        <th style="width: 100px;">意圖</th>
+                        <th style="width: 120px;">主要情緒</th>
+                        <th style="width: 140px;">逐字稿</th>
+                        <th style="width: 140px;">情緒分析</th>
+                        <th style="width: 80px;">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for record in records %}
+                    <tr>
+                        <td class="filename" title="{{ record['音檔檔名'] }}">{{ record['音檔檔名'] }}</td>
+                        <td>{{ record['上傳時間'] }}</td>
+                        <td>{{ record['處理時間'] }}</td>
+                        <td>
+                            {% if record['處理狀態'] == '完成' %}
+                                <span class="status-badge status-completed">✓ 完成</span>
+                            {% elif record['處理狀態'] == '處理中' %}
+                                <span class="status-badge status-processing">⟳ 處理中</span>
+                            {% elif record['處理狀態'] == '失敗' %}
+                                <span class="status-badge status-failed">✗ 失敗</span>
+                            {% else %}
+                                <span class="status-badge status-waiting">⋯ 等待中</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ record['分類'] }}</td>
+                        <td>{{ record['意圖'] }}</td>
+                        <td>{{ record['主要情緒'] }}</td>
+                        <td>
+                            {% if record['逐字稿連結'] %}
+                            <div class="cell-group">
+                                <button class="btn btn-view" onclick="window.open('/transcript/{{ record['逐字稿連結'] }}', '_blank')">
+                                    查看
+                                </button>
+                                <button class="btn btn-download" onclick="window.location.href='/download/transcript/{{ record['逐字稿連結'] }}'">
+                                    下載
+                                </button>
+                            </div>
+                            {% else %}
+                            <span style="color: #999;">-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if record['情緒分析連結'] %}
+                            <div class="cell-group">
+                                <button class="btn btn-view" onclick="window.open('/emotion/{{ record['情緒分析連結'] }}', '_blank')">
+                                    查看
+                                </button>
+                                <button class="btn btn-download" onclick="window.location.href='/download/emotion/{{ record['情緒分析連結'] }}'">
+                                    下載
+                                </button>
+                            </div>
+                            {% else %}
+                            <span style="color: #999;">-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <button class="btn btn-delete" onclick="deleteFile('{{ record['音檔檔名'] }}')">
+                                刪除
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // 載入統計數據並繪製圖表
+        fetch('/api/analytics')
+            .then(response => response.json())
+            .then(data => {
+                // 每日上傳圖表
+                new Chart(document.getElementById('dailyChart'), {
+                    type: 'line',
+                    data: {
+                        labels: data.daily_uploads.map(d => d.date.substring(5)),
+                        datasets: [{
+                            label: '上傳次數',
+                            data: data.daily_uploads.map(d => d.count),
+                            borderColor: '#3A528B',
+                            backgroundColor: 'rgba(58, 82, 139, 0.1)',
+                            tension: 0.4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: { legend: { display: false } }
+                    }
+                });
+
+                // 每小時上傳圖表
+                new Chart(document.getElementById('hourlyChart'), {
+                    type: 'bar',
+                    data: {
+                        labels: data.hourly_uploads.map(d => d.hour),
+                        datasets: [{
+                            label: '上傳次數',
+                            data: data.hourly_uploads.map(d => d.count),
+                            backgroundColor: '#2C728E'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: { legend: { display: false } }
+                    }
+                });
+
+                // 意圖統計圖表
+                const intentLabels = Object.keys(data.intent_stats);
+                const intentData = Object.values(data.intent_stats);
+                new Chart(document.getElementById('intentChart'), {
+                    type: 'doughnut',
+                    data: {
+                        labels: intentLabels,
+                        datasets: [{
+                            data: intentData,
+                            backgroundColor: ['#3A528B', '#2C728E', '#20908C', '#28AE7F']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true
+                    }
+                });
+
+                // 按鈕點擊統計
+                const buttonLabels = Object.keys(data.button_clicks);
+                const buttonData = Object.values(data.button_clicks);
+                new Chart(document.getElementById('buttonChart'), {
+                    type: 'bar',
+                    data: {
+                        labels: buttonLabels,
+                        datasets: [{
+                            label: '點擊次數',
+                            data: buttonData,
+                            backgroundColor: '#20908C'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: { legend: { display: false } }
+                    }
+                });
+            });
+
+        // 拖曳上傳功能
+        const uploadArea = document.getElementById('uploadArea');
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                uploadFileFromDrop(files[0]);
+            }
+        });
+
+        function uploadFile(input) {
+            if (input.files.length > 0) {
+                uploadFileFromDrop(input.files[0]);
+            }
+        }
+
+        function uploadFileFromDrop(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            showMessage('上傳中，請稍候...', 'info');
+            
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showMessage(data.message, 'success');
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    showMessage('錯誤：' + data.error, 'error');
+                }
+            })
+            .catch(error => {
+                showMessage('上傳失敗：' + error, 'error');
+            });
+        }
+
+        function deleteFile(filename) {
+            if (!confirm('確定要刪除 "' + filename + '" 嗎？')) {
+                return;
+            }
+            
+            fetch('/delete/' + encodeURIComponent(filename), {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showMessage(data.message, 'success');
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    showMessage('錯誤：' + data.error, 'error');
+                }
+            })
+            .catch(error => {
+                showMessage('刪除失敗：' + error, 'error');
+            });
+        }
+
+        function showMessage(text, type) {
+            const messageDiv = document.getElementById('message');
+            messageDiv.innerHTML = `<div class="message message-${type}">${text}</div>`;
+            
+            setTimeout(() => {
+                messageDiv.innerHTML = '';
+            }, 5000);
+        }
+
+        // 自動刷新（當有處理中的任務時）
+        {% if stats.processing > 0 %}
+        setTimeout(() => location.reload(), 5000);
+        {% endif %}
+        
+        function resetAnalytics() {
+            if (!confirm('確定要清除所有數據分析記錄嗎？此操作無法復原。')) {
+                return;
+            }
+            
+            fetch('/api/reset_analytics', {  // ← 确保有 /api/
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showMessage(data.message, 'success');
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    showMessage('錯誤：' + data.error, 'error');
+                }
+            })
+            .catch(error => {
+                showMessage('操作失敗：' + error, 'error');
+            });
+        }
+    </script>
+</body>
+</html>
