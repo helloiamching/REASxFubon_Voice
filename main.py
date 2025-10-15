@@ -527,6 +527,44 @@ def detect_hallucination_with_rules(segments):
     
     return hallucination_ranges
 
+from pydub import AudioSegment, silence
+
+def detect_and_trim_silence(audio_segment, silence_thresh=-50, min_silence_len=500):
+    """
+    偵測音訊開頭與結尾的靜音，並回傳裁剪後的音訊。
+    會同時回傳：
+    - processed_audio: 去除開頭結尾靜音的音訊（若無靜音則原樣）
+    - valid_duration: 有效音訊長度（秒）
+    - has_silence: 是否有靜音被裁剪
+    - sound_start, sound_end: 有效音訊的起訖時間（秒）
+    """
+    from pydub.silence import detect_nonsilent
+
+    duration_ms = len(audio_segment)
+    non_silence = detect_nonsilent(
+        audio_segment, min_silence_len=min_silence_len, silence_thresh=silence_thresh
+    )
+
+    if not non_silence:
+        # 全靜音
+        return None, 0.0, False, 0, 0
+
+    # 取最前與最後的非靜音區
+    sound_start = non_silence[0][0] / 1000.0
+    sound_end = non_silence[-1][1] / 1000.0
+    valid_duration = sound_end - sound_start
+
+    if valid_duration <= 0:
+        return None, 0.0, False, sound_start, sound_end
+
+    # 裁剪開頭與結尾的靜音
+    processed_audio = audio_segment[int(sound_start * 1000):int(sound_end * 1000)]
+    has_silence = (sound_start > 0.2 or (duration_ms / 1000.0 - sound_end) > 0.2)
+
+    return processed_audio, valid_duration, has_silence, sound_start, sound_end
+
+
+
 
 def merge_hallucination_ranges(ranges):
     """合併重疊或接近的幻覺時間段"""
@@ -703,6 +741,63 @@ def detect_and_skip_silence(audio_segment, min_silence_len=1000, silence_thresh=
         total_sec = len(audio_segment) / 1000
         return 0, total_sec, False
 
+import numpy as np
+import librosa
+
+def remove_customer_music(segment_audio, sample_rate=16000):
+    """
+    嘗試檢測並移除客服音樂（例如有旋律或歌詞的背景音）
+    原理：
+      - 將音訊轉為 Mel 頻譜
+      - 偵測是否出現穩定、寬頻能量的「旋律樣式」
+      - 若該區段 RMS 高且過於穩定，則視為音樂並裁剪
+    """
+    try:
+        # 轉為 numpy array
+        samples = np.array(segment_audio.get_array_of_samples()).astype(np.float32)
+        if segment_audio.channels == 2:
+            samples = samples.reshape((-1, 2)).mean(axis=1)  # 轉單聲道
+        
+        # 重採樣（保證一致）
+        y = librosa.resample(samples, orig_sr=segment_audio.frame_rate, target_sr=sample_rate)
+        S = librosa.feature.melspectrogram(y=y, sr=sample_rate, n_mels=64)
+        rms = librosa.feature.rms(S=S)[0]
+        
+        # 若平均 RMS 太低（整段太安靜），不處理
+        if np.mean(rms) < 0.005:
+            print(f"    ✓ 平均能量過低，判定無明顯音樂")
+            return segment_audio
+        
+        # 找出音樂段落：RMS 穩定且能量高
+        diff = np.abs(np.diff(rms))
+        music_mask = (rms > np.mean(rms) * 1.2) & (diff < np.mean(diff) * 0.3)
+        music_ratio = np.mean(music_mask)
+
+        # --- 情況 1：整段高比例音樂 ---
+        if music_ratio > 0.4:
+            print(f"    ⚠ 偵測到高比例客服音樂（{music_ratio*100:.1f}%），嘗試移除前半部分...")
+            cut_ms = len(segment_audio) * 0.4
+            segment_audio = segment_audio[int(cut_ms):]
+
+        # --- 情況 2：短段音樂片段 ---
+        elif 0.05 < music_ratio <= 0.4:
+            music_indices = np.where(music_mask)[0]
+            start_idx = librosa.frames_to_samples(music_indices[0])
+            end_idx = librosa.frames_to_samples(music_indices[-1])
+            start_ms = start_idx / sample_rate * 1000
+            end_ms = end_idx / sample_rate * 1000
+            print(f"    ⚠ 偵測到客服音樂片段 {start_ms/1000:.1f}s–{end_ms/1000:.1f}s，已裁剪")
+            segment_audio = segment_audio[:int(start_ms)] + segment_audio[int(end_ms):]
+        
+        # --- 情況 3：未發現音樂 ---
+        else:
+            print(f"    ✓ 前後無明顯音樂，使用完整片段")
+    
+    except Exception as e:
+        print(f"    ⚠ 音樂檢測失敗: {e}")
+    
+    return segment_audio
+
 
 # ========== 評估轉錄品質 ==========
 def evaluate_transcription_quality(segments):
@@ -834,22 +929,22 @@ def retranscribe_hallucination_segments(audio_path, hallucination_ranges, origin
             'temperature': 0,
             'prompt': "富邦產險客服。",
             'name': '策略0：無溫度'
+        },
+        {
+            'temperature': 0.5,
+            'prompt': "富邦產險客服。",
+            'name': '策略1：標準'
+        },
+        {
+            'temperature': 0.6,
+            'prompt': "富邦產險客服。",
+            'name': '策略2：高溫度'
+        },
+        {
+            'temperature': 0.4,
+            'prompt': "富邦產險客服。",
+            'name': '策略3：低溫度'
         }
-        # {
-        #     'temperature': 0.5,
-        #     'prompt': "富邦產險客服。",
-        #     'name': '策略1：標準'
-        # },
-        # {
-        #     'temperature': 0.6,
-        #     'prompt': "富邦產險客服。",
-        #     'name': '策略2：高溫度'
-        # },
-        # {
-        #     'temperature': 0.4,
-        #     'prompt': "富邦產險客服。",
-        #     'name': '策略3：低溫度'
-        # }
     ]
     
     for idx, hr in enumerate(hallucination_ranges, 1):
@@ -876,10 +971,20 @@ def retranscribe_hallucination_segments(audio_path, hallucination_ranges, origin
             print(f"    → 片段長度: {segment_duration:.1f}秒")
             
             # ========== 檢測並裁剪開頭和結尾的靜音 ==========
-            print(f"    → 檢測前後靜音...")
-            sound_start, sound_end, has_silence = detect_and_skip_silence(segment_audio)
-            
-            valid_duration = sound_end - sound_start
+            print(f"    → 檢測靜音並裁剪...")
+            processed_audio, valid_duration, has_silence, sound_start, sound_end = detect_and_trim_silence(segment_audio)
+
+            if processed_audio is None or valid_duration < 3:
+                print(f"    ⚠ 有效語音太短（{valid_duration:.1f} 秒），略過重錄")
+                continue
+
+            print(f"    → 裁剪後長度：{valid_duration:.1f} 秒")
+            segment_audio = processed_audio
+            segment_duration = valid_duration
+            actual_extract_start = extract_start  # 不需更新時間偏移
+            actual_extract_end = extract_start + valid_duration
+
+            _, valid_duration = detect_and_trim_silence(segment_audio)
             
             # 如果有效音訊太短（<3秒），可能整段都是靜音
             if valid_duration < 3:
@@ -917,6 +1022,10 @@ def retranscribe_hallucination_segments(audio_path, hallucination_ranges, origin
                 print(f"    ✓ 前後無明顯靜音，使用完整片段")
                 actual_extract_start = extract_start
                 actual_extract_end = extract_end
+
+                        # ========== 檢測並去除客服音樂 ==========
+            print(f"    → 嘗試去除客服音樂...")
+            segment_audio = remove_customer_music(segment_audio)
             
             # 多次重試
             best_segments = None
@@ -1179,55 +1288,63 @@ def speaker_separation_and_correction_with_gpt(segments):
     full_text = "\n".join(texts)
     
     correction_prompt = build_correction_prompt()
-    
-    prompt = f"""你是專業的客服對話分析師。請分析以下保險客服對話逐字稿，完成兩項任務：
+    prompt = f"""
+        你是專業的客服對話分析師。請分析以下保險客服對話逐字稿，完成兩項任務：
 
-**任務1：說話人分離**
+        ---
 
-判斷每句話的說話人（客服 or 客戶）。
+        ### 任務1：說話人分離
+        判斷每句話的說話人（客服 or 客戶）。
 
-客服的明確特徵：
-- 開場白：「XX保險為您服務」、「您好，我是XX」、「很高興為您服務」、「敝姓XX」
-- 敬語：「請問」、「麻煩您」、「幫您」、「為您」、「感謝您」
-- 詢問資訊：「請問貴姓」、「請提供身分證」、「您的保單號碼是」、「信用卡末四碼」
-- 確認回應：「好的，我幫您查詢」、「收到」、「了解」、「沒問題」
-- 解釋說明：「這個部分是...」、「根據您的保單...」
+        客服的明確特徵：
+        - 開場白：「XX保險為您服務」、「您好，我是XX」、「很高興為您服務」、「敝姓XX」
+        - 敬語：「請問」、「麻煩您」、「幫您」、「為您」、「感謝您」
+        - 詢問資訊：「請問貴姓」、「請提供身分證」、「您的保單號碼是」、「信用卡末四碼」
+        - 確認回應：「好的，我幫您查詢」、「收到」、「了解」、「沒問題」
+        - 解釋說明：「這個部分是...」、「根據您的保單...」
 
-判斷要則：
-- 第一句通常是客服開場
-- 誰說「您」通常是客服
-- 如果不是客服，另一說話者必定為客戶
-- 看前後文和說話風格
+        判斷要則：
+        - 第一句通常是客服開場
+        - 誰說「您」通常是客服
+        - 如果不是客服，另一說話者必定為客戶
+        - 看前後文和說話風格
 
-**任務2：錯字修正**
+        ---
 
-根據以下對照表修正明顯的錯字和同音字錯誤，但不要改變語意。
+        ### 任務2：錯字修正
+        根據以下對照表修正明顯的錯字和同音字錯誤，但不要改變語意。
 
-{correction_prompt}
+        {correction_prompt}
 
-修正原則：
-- **特別注意**：「默斯碼」、「莫斯碼」、「莫四碼」必須修正為「末四碼」
-- **特別注意**：「客邦產險」必須修正為「富邦產險」
-- 優先使用上述對照表中的正確用語
-- 注意繁體中文的使用
-- 保持原句語意不變
-- 只修正明顯的錯字和同音字錯誤
+        修正原則：
+        - 「默斯碼」「莫斯碼」「莫四碼」 → 修正為「末四碼」
+        - 「客邦產險」 → 修正為「富邦產險」
+        - 優先使用對照表中的正確用語
+        - 使用繁體中文
+        - 保持語意不變
 
-逐字稿：
-{full_text}
+        ---
 
-請只回傳 JSON 格式：
-{{
-  "dialogue": [
-    {{"role": "客服", "text": "修正後的文字"}},
-    {{"role": "客戶", "text": "修正後的文字"}},
-    ...
-  ]
-}}"""
+        ### 對話逐字稿：
+        {full_text}
+
+        ---
+
+        ### 輸出格式要求（務必嚴格遵守）：
+        只回傳**合法 JSON**，不要包含任何說明或額外文字。  
+        JSON 必須符合以下格式：
+
+        ```json
+        {{
+        "dialogue": [
+            {{"role": "客服", "text": "修正後的文字"}},
+            {{"role": "客戶", "text": "修正後的文字"}}
+        ]
+        }}"""
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=6000,
             temperature=0.1
@@ -1513,10 +1630,35 @@ def process_audio_file(audio_file, original_name=None):
         )
         step5_time = time() - step5_start
         print(f"  ✓ 幻覺段落重新轉錄完成: {step5_time:.2f}秒")
+
+        # Step 5.1: 第二輪幻覺檢測
+        print(f"\n【第二輪幻覺檢測】")
+        hallucination_ranges_2 = detect_hallucination_with_rules(final_segments)
+        if hallucination_ranges_2:
+            print(f"  ⚠ 偵測到 {len(hallucination_ranges_2)} 個殘留幻覺片段 → 進行第2次重轉錄")
+            final_segments = retranscribe_hallucination_segments(
+                original_audio,
+                hallucination_ranges_2,
+                final_segments
+            )
+
+            # Step 5.2: 第三輪檢測（最終確認）
+            print(f"\n【最終幻覺檢測】")
+            hallucination_ranges_final = detect_hallucination_with_rules(final_segments)
+            if hallucination_ranges_final:
+                print(f"  ⚠ 仍有 {len(hallucination_ranges_final)} 殘留問題段落，可能為音檔品質問題")
+                for hr in hallucination_ranges_final:
+                    print(f"    → 問題段 {hr['start']:.1f}s - {hr['end']:.1f}s，原因: {hr['reason']}")
+            else:
+                print(f"  ✓ 第二次重錄後無幻覺問題")
+        else:
+            print(f"  ✓ 重錄後已無幻覺問題")
+
     else:
         final_segments = preprocessed_segments
         step5_time = 0
         print(f"  ✓ 無需重新轉錄")
+
     
     # Step 6: OpenAI API 1 說話人分離 + 錯字修正
     print(f"\n【OpenAI API 1: 說話人分離與錯字修正】")
@@ -1542,7 +1684,16 @@ def process_audio_file(audio_file, original_name=None):
     print(f"  → 分類結果: {problem_type}")
     print(f"  → 客戶意圖: {intent}")
     
-    # Step 9: 儲存結果
+
+    # Step 9: 儲存問題原因
+    if 'hallucination_ranges_final' in locals() and hallucination_ranges_final:
+        print(f"【疑似音檔問題段落】")
+        for hr in hallucination_ranges_final:
+            f.write(f"  - {hr['start']:.1f}s ~ {hr['end']:.1f}s: {hr['reason']}\n")
+        print(f"\n⚠ 以上段落可能因雜訊或打碼導致語音辨識不穩。\n")
+
+
+     # Step 10: 儲存結果
     step9_start = time()
     
     class_folder = CLASS_FOLDERS.get(problem_type, CLASS_FOLDERS["其他"])

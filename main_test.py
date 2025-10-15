@@ -1,4 +1,3 @@
-# 主要改進：
 # 1. 簡化流程：音檔 -> 280秒拆分 -> Whisper轉錄（無預處理，直接使用原始音訊）
 # 2. 移除所有預處理：避免FFmpeg降噪和音量調整導致音訊變成無聲
 # 3. 極輕度預處理：只去除連續3次以上完全相同的重複
@@ -60,7 +59,7 @@ api_key = os.getenv('OPENAI_API_KEY')
 # ========== 核心詞彙庫 ==========
 CORE_VOCABULARY = {
     "whisper_keywords": [
-        "富邦產險", "敝姓溫", "敝姓廖",
+        "富邦產險", "醫責險",
         "旅平險", "不便險", "強制險", "車險",
         "投保", "續保", "末四碼"
     ],
@@ -74,17 +73,26 @@ CORE_VOCABULARY = {
         "信用卡": ["信用卡", "新用卡"],
         "投保": ["頭包", "投報", "投堡"],
         "保費": ["報廢", "保肥", "報費"],
-        "理賠": ["裡酬", "理配", "理陪"],
-        "強制險": ["強迫險", "強制線", "強制先"],
+        "理賠": ["裡酬", "理配", "理陪","李培"],
+        "醫責險": ["醫雞險", "醫鴨險", "醫責線"],
+        "核保": ["何保"],
+        "強制險": ["強迫險", "強制線", "強制先","長治險"],
         "續保": ["續報", "續堡", "續包"],
         "保單": ["報單", "保丹", "報丹"],
-        "產險": ["產雞", "產線", "產先"],
+        "產險": ["產雞", "產線", "產先","傳血"],
         "車險": ["車線", "車先", "計車惜", "汽車惜"],
         "您好": ["您豪", "您號", "您毫"],
         "敝姓": ["敝性", "幣姓", "弊姓"],
         "麻煩": ["麻凡", "麻煩"],
         "謝謝": ["謝謝", "些些"],
         "死亡及失能": ["身部及心能"],
+        "警示鍵": ["警示鍵"],
+        "家中出發":["加州出發"],
+        "權限的": ["全校的"],
+        '加值型': ['加值行',"家支型"],
+        '調解委員會': ['拆解委員會'],
+        '忙線': ['盲線'],
+        '臨櫃': ['靈貴']
     }
 }
 
@@ -644,56 +652,139 @@ def enhance_audio_for_retranscription(audio_segment):
 
 
 # ========== 檢測並跳過靜默段落 ==========
-def detect_and_skip_silence(audio_segment, min_silence_len=1000, silence_thresh=-40):
+def detect_and_trim_silence(audio_segment, silence_thresh=-50, min_silence_len=500):
     """
-    檢測音訊開頭和結尾的靜默段落，返回有效音訊的起始和結束位置
+    偵測並移除音訊中的靜音（開頭、結尾和中間明顯靜音）
+    特別針對打碼音（短促靜音）進行處理
     
-    注意：只修剪開頭和結尾的靜音，中間的靜音保留（可能是說話停頓）
+    處理邏輯：
+    1. 偵測所有非靜音段落
+    2. 移除開頭和結尾的靜音
+    3. 移除中間明顯的靜音（如打碼音）- 超過 min_silence_len
+    4. 將所有有聲段落合併成連續音訊
     
-    參數:
-        audio_segment: pydub AudioSegment
-        min_silence_len: 靜默的最小長度（毫秒）
-        silence_thresh: 靜默閾值（dBFS）
+    參數：
+    - audio_segment: pydub AudioSegment
+    - silence_thresh: 靜音閾值（dBFS），預設 -50
+    - min_silence_len: 最小靜音長度（毫秒），預設 500ms
     
-    返回:
-        start_sec: 有效音訊的起始位置（秒）
-        end_sec: 有效音訊的結束位置（秒）
-        has_silence: 是否檢測到前後靜音
+    返回：
+    - processed_audio: 去除所有靜音後合併的音訊
+    - valid_duration: 有效音訊長度（秒）
+    - has_silence: 是否有靜音被裁剪
+    - sound_start: 原始音訊中第一個有聲音的位置（秒）
+    - sound_end: 原始音訊中最後一個有聲音的位置（秒）
+    """
+    from pydub.silence import detect_nonsilent
+
+    duration_ms = len(audio_segment)
+    
+    # 偵測所有非靜音段落
+    non_silence = detect_nonsilent(
+        audio_segment, 
+        min_silence_len=min_silence_len, 
+        silence_thresh=silence_thresh
+    )
+
+    if not non_silence:
+        # 全靜音
+        print(f"      ⚠ 整段音訊都是靜音")
+        return None, 0.0, False, 0, 0
+
+    # 記錄原始的起始和結束位置
+    sound_start = non_silence[0][0] / 1000.0
+    sound_end = non_silence[-1][1] / 1000.0
+    
+    # 合併所有非靜音段落
+    merged_audio = AudioSegment.empty()
+    total_silence_removed_ms = 0
+    
+    for i, (start_ms, end_ms) in enumerate(non_silence):
+        segment = audio_segment[start_ms:end_ms]
+        merged_audio += segment
+        
+        # 計算被移除的靜音
+        if i > 0:
+            prev_end = non_silence[i-1][1]
+            silence_duration = start_ms - prev_end
+            total_silence_removed_ms += silence_duration
+    
+    # 計算開頭和結尾的靜音
+    leading_silence_ms = non_silence[0][0]
+    trailing_silence_ms = duration_ms - non_silence[-1][1]
+    total_silence_removed_ms += leading_silence_ms + trailing_silence_ms
+    
+    valid_duration = len(merged_audio) / 1000.0
+    
+    if valid_duration <= 0:
+        print(f"      ⚠ 合併後音訊長度為0")
+        return None, 0.0, False, sound_start, sound_end
+    
+    # 判斷是否有明顯的靜音被裁剪
+    has_silence = total_silence_removed_ms > 1000  # 超過1秒的靜音
+    
+    if has_silence:
+        print(f"      ✓ 移除靜音: 開頭 {leading_silence_ms/1000:.1f}s + "
+              f"中間 {(total_silence_removed_ms - leading_silence_ms - trailing_silence_ms)/1000:.1f}s + "
+              f"結尾 {trailing_silence_ms/1000:.1f}s")
+        print(f"      ✓ 合併了 {len(non_silence)} 個有聲段落")
+        print(f"      ✓ 原始長度 {duration_ms/1000:.1f}s → 有效長度 {valid_duration:.1f}s")
+
+    return merged_audio, valid_duration, has_silence, sound_start, sound_end
+
+def remove_customer_music(segment_audio, sample_rate=16000):
+    """
+    嘗試檢測並移除客服音樂（例如有旋律或歌詞的背景音）
+    原理：
+      - 將音訊轉為 Mel 頻譜
+      - 偵測是否出現穩定、寬頻能量的「旋律樣式」
+      - 若該區段 RMS 高且過於穩定，則視為音樂並裁剪
     """
     try:
-        from pydub.silence import detect_nonsilent
+        # 轉為 numpy array
+        samples = np.array(segment_audio.get_array_of_samples()).astype(np.float32)
+        if segment_audio.channels == 2:
+            samples = samples.reshape((-1, 2)).mean(axis=1)  # 轉單聲道
         
-        # 檢測非靜默段落
-        nonsilent_ranges = detect_nonsilent(
-            audio_segment,
-            min_silence_len=min_silence_len,
-            silence_thresh=silence_thresh,
-            seek_step=100  # 檢測步長（毫秒）
-        )
+        # 重採樣（保證一致）
+        y = librosa.resample(samples, orig_sr=segment_audio.frame_rate, target_sr=sample_rate)
+        S = librosa.feature.melspectrogram(y=y, sr=sample_rate, n_mels=64)
+        rms = librosa.feature.rms(S=S)[0]
         
-        if not nonsilent_ranges:
-            # 整段都是靜默
-            return 0, len(audio_segment) / 1000, False
+        # 若平均 RMS 太低（整段太安靜），不處理
+        if np.mean(rms) < 0.005:
+            print(f"    ✓ 平均能量過低，判定無明顯音樂")
+            return segment_audio
         
-        # 獲取第一個有聲音的位置（開頭）
-        first_sound_ms = nonsilent_ranges[0][0]
-        # 獲取最後一個有聲音的位置（結尾）
-        last_sound_ms = nonsilent_ranges[-1][1]
+        # 找出音樂段落：RMS 穩定且能量高
+        diff = np.abs(np.diff(rms))
+        music_mask = (rms > np.mean(rms) * 1.2) & (diff < np.mean(diff) * 0.3)
+        music_ratio = np.mean(music_mask)
+
+        # --- 情況 1：整段高比例音樂 ---
+        if music_ratio > 0.4:
+            print(f"    ⚠ 偵測到高比例客服音樂（{music_ratio*100:.1f}%），嘗試移除前半部分...")
+            cut_ms = len(segment_audio) * 0.4
+            segment_audio = segment_audio[int(cut_ms):]
+
+        # --- 情況 2：短段音樂片段 ---
+        elif 0.05 < music_ratio <= 0.4:
+            music_indices = np.where(music_mask)[0]
+            start_idx = librosa.frames_to_samples(music_indices[0])
+            end_idx = librosa.frames_to_samples(music_indices[-1])
+            start_ms = start_idx / sample_rate * 1000
+            end_ms = end_idx / sample_rate * 1000
+            print(f"    ⚠ 偵測到客服音樂片段 {start_ms/1000:.1f}s–{end_ms/1000:.1f}s，已裁剪")
+            segment_audio = segment_audio[:int(start_ms)] + segment_audio[int(end_ms):]
         
-        # 轉換為秒
-        start_sec = first_sound_ms / 1000
-        end_sec = last_sound_ms / 1000
-        
-        # 判斷是否有明顯的前後靜音（超過0.5秒）
-        has_silence = (first_sound_ms > 500) or (len(audio_segment) - last_sound_ms > 500)
-        
-        return start_sec, end_sec, has_silence
+        # --- 情況 3：未發現音樂 ---
+        else:
+            print(f"    ✓ 前後無明顯音樂，使用完整片段")
     
     except Exception as e:
-        # 如果檢測失敗，返回全段
-        print(f"      ⚠ 靜默檢測失敗: {e}，使用全段音訊")
-        total_sec = len(audio_segment) / 1000
-        return 0, total_sec, False
+        print(f"    ⚠ 音樂檢測失敗: {e}")
+    
+    return segment_audio
 
 
 # ========== 評估轉錄品質 ==========
@@ -823,18 +914,23 @@ def retranscribe_hallucination_segments(audio_path, hallucination_ranges, origin
     # 不同的重試策略
     retry_strategies = [
         {
+            'temperature': 0,
+            'prompt': "富邦產險客服。",
+            'name': '策略0：無溫度'
+        },
+        {
             'temperature': 0.5,
-            'prompt': "富邦產險。請提供身分證和信用卡末四碼。",
+            'prompt': "富邦產險客服。",
             'name': '策略1：標準'
         },
         {
             'temperature': 0.6,
-            'prompt': "富邦產險客服。身分證、信用卡末四碼。",
+            'prompt': "富邦產險客服。",
             'name': '策略2：高溫度'
         },
         {
             'temperature': 0.4,
-            'prompt': "保險客服對話。",
+            'prompt': "富邦產險客服。",
             'name': '策略3：低溫度'
         }
     ]
@@ -864,9 +960,16 @@ def retranscribe_hallucination_segments(audio_path, hallucination_ranges, origin
             
             # ========== 檢測並裁剪開頭和結尾的靜音 ==========
             print(f"    → 檢測前後靜音...")
-            sound_start, sound_end, has_silence = detect_and_skip_silence(segment_audio)
+            processed_audio, valid_duration, has_silence, sound_start, sound_end = detect_and_trim_silence(segment_audio)
             
-            valid_duration = sound_end - sound_start
+            if processed_audio is None or valid_duration < 3:
+                print("⚠ 有效語音太短，略過重錄")
+                # 移除該幻覺片段
+                continue
+
+            # 3. 繼續處理
+            segment_audio = processed_audio
+            segment_duration = valid_duration
             
             # 如果有效音訊太短（<3秒），可能整段都是靜音
             if valid_duration < 3:
@@ -904,6 +1007,10 @@ def retranscribe_hallucination_segments(audio_path, hallucination_ranges, origin
                 print(f"    ✓ 前後無明顯靜音，使用完整片段")
                 actual_extract_start = extract_start
                 actual_extract_end = extract_end
+
+                        # ========== 檢測並去除客服音樂 ==========
+            print(f"    → 嘗試去除客服音樂...")
+            segment_audio = remove_customer_music(segment_audio)
             
             # 多次重試
             best_segments = None
@@ -1166,55 +1273,63 @@ def speaker_separation_and_correction_with_gpt(segments):
     full_text = "\n".join(texts)
     
     correction_prompt = build_correction_prompt()
-    
-    prompt = f"""你是專業的客服對話分析師。請分析以下保險客服對話逐字稿，完成兩項任務：
+    prompt = f"""
+        你是專業的客服對話分析師。請分析以下保險客服對話逐字稿，完成兩項任務：
 
-**任務1：說話人分離**
+        ---
 
-判斷每句話的說話人（客服 or 客戶）。
+        ### 任務1：說話人分離
+        判斷每句話的說話人（客服 or 客戶）。
 
-客服的明確特徵：
-- 開場白：「XX保險為您服務」、「您好，我是XX」、「很高興為您服務」、「敝姓XX」
-- 敬語：「請問」、「麻煩您」、「幫您」、「為您」、「感謝您」
-- 詢問資訊：「請問貴姓」、「請提供身分證」、「您的保單號碼是」、「信用卡末四碼」
-- 確認回應：「好的，我幫您查詢」、「收到」、「了解」、「沒問題」
-- 解釋說明：「這個部分是...」、「根據您的保單...」
+        客服的明確特徵：
+        - 開場白：「XX保險為您服務」、「您好，我是XX」、「很高興為您服務」、「敝姓XX」
+        - 敬語：「請問」、「麻煩您」、「幫您」、「為您」、「感謝您」
+        - 詢問資訊：「請問貴姓」、「請提供身分證」、「您的保單號碼是」、「信用卡末四碼」
+        - 確認回應：「好的，我幫您查詢」、「收到」、「了解」、「沒問題」
+        - 解釋說明：「這個部分是...」、「根據您的保單...」
 
-判斷要則：
-- 第一句通常是客服開場
-- 誰說「您」通常是客服
-- 如果不是客服，另一說話者必定為客戶
-- 看前後文和說話風格
+        判斷要則：
+        - 第一句通常是客服開場
+        - 誰說「您」通常是客服
+        - 如果不是客服，另一說話者必定為客戶
+        - 看前後文和說話風格
 
-**任務2：錯字修正**
+        ---
 
-根據以下對照表修正明顯的錯字和同音字錯誤，但不要改變語意。
+        ### 任務2：錯字修正
+        根據以下對照表修正明顯的錯字和同音字錯誤，但不要改變語意。
 
-{correction_prompt}
+        {correction_prompt}
 
-修正原則：
-- **特別注意**：「默斯碼」、「莫斯碼」、「莫四碼」必須修正為「末四碼」
-- **特別注意**：「客邦產險」必須修正為「富邦產險」
-- 優先使用上述對照表中的正確用語
-- 注意繁體中文的使用
-- 保持原句語意不變
-- 只修正明顯的錯字和同音字錯誤
+        修正原則：
+        - 「默斯碼」「莫斯碼」「莫四碼」 → 修正為「末四碼」
+        - 「客邦產險」 → 修正為「富邦產險」
+        - 優先使用對照表中的正確用語
+        - 使用繁體中文
+        - 保持語意不變
 
-逐字稿：
-{full_text}
+        ---
 
-請只回傳 JSON 格式：
-{{
-  "dialogue": [
-    {{"role": "客服", "text": "修正後的文字"}},
-    {{"role": "客戶", "text": "修正後的文字"}},
-    ...
-  ]
-}}"""
+        ### 對話逐字稿：
+        {full_text}
+
+        ---
+
+        ### 輸出格式要求（務必嚴格遵守）：
+        只回傳**合法 JSON**，不要包含任何說明或額外文字。  
+        JSON 必須符合以下格式：
+
+        ```json
+        {{
+        "dialogue": [
+            {{"role": "客服", "text": "修正後的文字"}},
+            {{"role": "客戶", "text": "修正後的文字"}}
+        ]
+        }}"""
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=6000,
             temperature=0.1
