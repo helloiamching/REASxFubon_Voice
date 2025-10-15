@@ -10,6 +10,7 @@ from io import BytesIO
 import uuid
 import time as time_module
 from collections import Counter
+import traceback  # 新增：用於詳細錯誤追蹤
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'recordings'
@@ -107,8 +108,11 @@ def allowed_file(filename):
 
 
 def process_audio_async(internal_filename, original_filename):
-    """背景處理音檔"""
-    from main import process_audio_file
+    """背景處理音檔（修復版）"""
+    print(f"\n{'='*60}")
+    print(f"[背景線程] 開始處理: {original_filename}")
+    print(f"[背景線程] 內部檔名: {internal_filename}")
+    print(f"{'='*60}")
     
     start_time = time_module.time()
 
@@ -121,9 +125,27 @@ def process_audio_async(internal_filename, original_filename):
     save_records(records)
 
     try:
-        # 執行處理
+        # 匯入處理函數
+        print("[背景線程] 正在匯入 main.py...")
+        from main import process_audio_file
+        print("[背景線程] ✓ 匯入成功")
+
+        # 執行處理（修復：移除 denoise_level 參數，只傳 audio_path 和 original_name）
         audio_path = Path(app.config['UPLOAD_FOLDER']) / internal_filename
-        result = process_audio_file(audio_path, enable_denoise=True, original_name=original_filename)
+        print(f"[背景線程] 音檔路徑: {audio_path}")
+        print(f"[背景線程] 檔案存在: {audio_path.exists()}")
+        
+        if not audio_path.exists():
+            raise FileNotFoundError(f"找不到音檔: {audio_path}")
+        
+        print(f"[背景線程] 開始調用 process_audio_file...")
+        
+        result = process_audio_file(
+            audio_path, 
+            original_name=original_filename
+        )
+        
+        print(f"[背景線程] ✓ 處理完成")
 
         # 計算處理時間
         processing_time = time_module.time() - start_time
@@ -136,15 +158,12 @@ def process_audio_async(internal_filename, original_filename):
                 record['處理時間'] = f"{processing_time:.2f}秒"
                 record['分類'] = result.get('class', '其他')
                 record['摘要'] = result.get('abstract', '')
-                record['意圖'] = ', '.join(result.get('intents', []))
+                record['意圖'] = result.get('intent', '其他')  # 修復：使用 'intent' 而非 'intents'
 
-                # 獲取主要情緒
-                emotions = result.get('emotions', {})
-                if emotions:
-                    main_emotion = max(emotions.items(), key=lambda x: x[1])
-                    record['主要情緒'] = f"{main_emotion[0]} ({main_emotion[1]}次)"
+                # 移除情緒相關部分，因為 main.py 未返回 'emotions'
+                # record['主要情緒'] = '-'  # 預設為 '-'
 
-                # 找到逐字稿檔案和情緒分析檔案
+                # 找到逐字稿檔案
                 class_folder = {
                     "傷害健康保險": "class_disease",
                     "旅平險": "class_travel",
@@ -157,25 +176,43 @@ def process_audio_async(internal_filename, original_filename):
                 transcript_file = f"{class_folder}/voice_text/{base_name}.txt"
                 if os.path.exists(transcript_file):
                     record['逐字稿連結'] = transcript_file
+                    print(f"[背景線程] ✓ 找到逐字稿: {transcript_file}")
 
-                emotion_file = f"{class_folder}/voice_emo/{base_name}_emotion.txt"
-                if os.path.exists(emotion_file):
-                    record['情緒分析連結'] = emotion_file
+                # 移除情緒檔案部分，因為 main.py 未生成
+                # emotion_file = f"{class_folder}/voice_emo/{base_name}_emotion.txt"
+                # if os.path.exists(emotion_file):
+                #     record['情緒分析連結'] = emotion_file
+                #     print(f"[背景線程] ✓ 找到情緒分析: {emotion_file}")
 
                 break
         save_records(records)
+        
+        print(f"[背景線程] ✓ 紀錄已更新")
+        print(f"[背景線程] 總處理時間: {processing_time:.2f}秒")
 
     except Exception as e:
-        # 處理失敗
+        # 處理失敗 - 詳細錯誤記錄
         processing_time = time_module.time() - start_time
+        error_message = str(e)
+        error_traceback = traceback.format_exc()
+        
+        print(f"[背景線程] ✗ 處理失敗!")
+        print(f"[背景線程] 錯誤訊息: {error_message}")
+        print(f"[背景線程] 詳細追蹤:")
+        print(error_traceback)
+        
         records = load_records()
         for record in records:
             if record['音檔檔名'] == original_filename:
                 record['處理狀態'] = '失敗'
                 record['處理時間'] = f"{processing_time:.2f}秒"
-                record['錯誤訊息'] = str(e)
+                record['錯誤訊息'] = f"{error_message}\n\n追蹤:\n{error_traceback}"
                 break
         save_records(records)
+    
+    finally:
+        print(f"[背景線程] 結束處理: {original_filename}")
+        print(f"{'='*60}\n")
 
 
 @app.route('/')
@@ -191,7 +228,7 @@ def index():
         'failed': sum(1 for r in records if r['處理狀態'] == '失敗')
     }
 
-    # 按時間排序（最新的在前）
+    # 按時間排序(最新的在前)
     records.sort(key=lambda x: x['上傳時間'], reverse=True)
 
     return render_template('index.html', records=records, stats=stats)
@@ -199,34 +236,51 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    """上傳音檔（保留中文檔名）"""
+    """上傳音檔(保留中文檔名) - 添加調試日誌"""
+    print(f"[DEBUG] Upload request received. Content-Type: {request.content_type}")
+    print(f"[DEBUG] Files keys in request: {list(request.files.keys() if request.files else [])}")
+    
     if 'file' not in request.files:
+        print("[DEBUG] Error: 'file' not in request.files")
         return jsonify({'success': False, 'error': '沒有選擇檔案'})
 
     file = request.files['file']
+    print(f"[DEBUG] File object: {file}, filename: '{file.filename}'")
 
     if file.filename == '':
+        print("[DEBUG] Error: filename is empty")
         return jsonify({'success': False, 'error': '檔案名稱為空'})
 
     if not allowed_file(file.filename):
+        print(f"[DEBUG] Error: invalid extension for '{file.filename}'")
         return jsonify({'success': False, 'error': '不支援的檔案格式'})
 
-    # 保留原始檔名（含中文）
+    # 保留原始檔名(含中文)
     original_filename = file.filename
+    print(f"[DEBUG] Original filename: '{original_filename}'")
     
-    # 生成唯一的內部檔名（用於存儲）
+    # 生成唯一的內部檔名(用於存儲)
     file_ext = original_filename.rsplit('.', 1)[1].lower()
     internal_filename = f"{uuid.uuid4().hex}.{file_ext}"
     
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], internal_filename)
+    print(f"[DEBUG] Internal filepath: {filepath}")
 
     # 檢查原始檔名是否已存在
     records = load_records()
-    if any(r['音檔檔名'] == original_filename for r in records):
+    existing = any(r['音檔檔名'] == original_filename for r in records)
+    print(f"[DEBUG] File exists in records? {existing}")
+    if existing:
+        print("[DEBUG] Error: file already exists")
         return jsonify({'success': False, 'error': '檔案已存在'})
 
     # 保存檔案
-    file.save(filepath)
+    try:
+        file.save(filepath)
+        print(f"[上傳] 檔案已保存: {filepath}")
+    except Exception as save_err:
+        print(f"[DEBUG] Save error: {save_err}")
+        return jsonify({'success': False, 'error': f'保存失敗: {str(save_err)}'})
 
     # 保存檔名映射
     filename_map = load_filename_map()
@@ -245,7 +299,7 @@ def upload_file():
         '分類': '-',
         '摘要': '-',
         '意圖': '-',
-        '主要情緒': '-',
+        '主要情緒': '-',  # 預設為 '-'
         '逐字稿連結': None,
         '情緒分析連結': None,
         '錯誤訊息': None
@@ -253,13 +307,18 @@ def upload_file():
     save_records(records)
 
     # 啟動背景處理
-    thread = threading.Thread(target=process_audio_async, args=(internal_filename, original_filename))
-    thread.daemon = True
+    print(f"[上傳] 啟動背景線程處理: {original_filename}")
+    thread = threading.Thread(
+        target=process_audio_async, 
+        args=(internal_filename, original_filename),
+        daemon=True
+    )
     thread.start()
+    print(f"[上傳] 背景線程已啟動")
 
     return jsonify({
         'success': True,
-        'message': f'檔案 {original_filename} 上傳成功，開始處理中...'
+        'message': f'檔案 {original_filename} 上傳成功,開始處理中...'
     })
 
 
@@ -283,25 +342,25 @@ def delete_file(filename):
             del filename_map[filename]
             save_filename_map(filename_map)
 
-        # 刪除處理後的音檔
+        # 刪除處理後的音檔（根據 main.py 的輸出調整 suffix）
         base_name = Path(filename).stem
-        processed_path = Path('recordings_processed') / f"{base_name}_processed_denoised.wav"
-        if processed_path.exists():
-            processed_path.unlink()
+        
+        # 檢查所有可能的處理後檔名（main.py 輸出如 _clean.wav, _normalized.wav 等）
+        for suffix in ['_clean.wav', '_normalized.wav', '_light_clean.wav', '_medium_clean.wav', '_converted.wav']:
+            processed_path = Path('recordings_processed') / f"{base_name}{suffix}"
+            if processed_path.exists():
+                processed_path.unlink()
 
-        processed_path_no_denoise = Path('recordings_processed') / f"{base_name}_processed.wav"
-        if processed_path_no_denoise.exists():
-            processed_path_no_denoise.unlink()
-
-        # 刪除逐字稿和情緒分析檔案
+        # 刪除逐字稿檔案
         for class_folder in ['class_disease', 'class_travel', 'class_car', 'class_other']:
             text_file = Path(class_folder) / 'voice_text' / f"{base_name}.txt"
             if text_file.exists():
                 text_file.unlink()
 
-            emo_file = Path(class_folder) / 'voice_emo' / f"{base_name}_emotion.txt"
-            if emo_file.exists():
-                emo_file.unlink()
+            # 移除情緒檔案刪除，因為 main.py 未生成
+            # emo_file = Path(class_folder) / 'voice_emo' / f"{base_name}_emotion.txt"
+            # if emo_file.exists():
+            #     emo_file.unlink()
 
         # 更新紀錄
         records = load_records()
@@ -449,18 +508,18 @@ def get_analytics():
     intent_stats = {}
     for record in records:
         if record['處理狀態'] == '完成' and record.get('意圖') != '-':
-            intents = record['意圖'].split(', ')
-            for intent in intents:
-                intent_stats[intent] = intent_stats.get(intent, 0) + 1
+            # 修復：intent 是單一字符串，不是列表
+            intent = record['意圖']
+            intent_stats[intent] = intent_stats.get(intent, 0) + 1
     
-    # 每日上傳統計（最近7天）
+    # 每日上傳統計(最近7天)
     daily_data = []
     for i in range(6, -1, -1):
         date = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
         count = analytics.get('daily_uploads', {}).get(date, 0)
         daily_data.append({'date': date, 'count': count})
     
-    # 每小時上傳統計（今天）
+    # 每小時上傳統計(今天)
     hourly_data = []
     today = datetime.now().strftime('%Y-%m-%d')
     for hour in range(24):
@@ -474,6 +533,7 @@ def get_analytics():
         'daily_uploads': daily_data,
         'hourly_uploads': hourly_data
     })
+
 
 @app.route('/api/reset_analytics', methods=['POST'])
 def reset_analytics():
@@ -499,4 +559,11 @@ def reset_analytics():
 
 
 if __name__ == '__main__':
+    print("\n" + "="*60)
+    print("Flask 伺服器啟動中...")
+    print("="*60)
+    print("訪問地址: http://localhost:5003")
+    print("調試提示: 檢查控制台 [DEBUG] 日誌以診斷上傳問題")
+    print("="*60 + "\n")
+    
     app.run(debug=True, host='0.0.0.0', port=5003)
