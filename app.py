@@ -371,19 +371,43 @@ def delete_file(filename):
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
-
-
+    
 @app.route('/transcript/<path:filepath>')
 def view_transcript(filepath):
     """查看逐字稿"""
     track_button_click('查看逐字稿')
     try:
+        import os
+        import json
+
+        # 讀取純文字逐字稿
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
+
+        # 嘗試找對應的 result.json
+        base_name = os.path.splitext(os.path.basename(filepath))[0]
+        result_path = os.path.join(os.path.dirname(filepath), f"{base_name}.result.json")
+
+        if os.path.exists(result_path):
+            with open(result_path, "r", encoding="utf-8") as rf:
+                result = json.load(rf)
+
+            if result.get("has_audio_quality_issue"):
+                warning_lines = ["注意：部分段落可能因音檔問題導致辨識困難"]
+                for issue in result.get("audio_issues", []):
+                    m_start, s_start = divmod(int(issue['start']), 60)
+                    m_end, s_end = divmod(int(issue['end']), 60)
+                    warning_lines.append(
+                        f"  - {m_start:02d}:{s_start:02d} ~ {m_end:02d}:{s_end:02d}")
+                warning_html = "<br>".join(warning_lines)
+
+                # 加在逐字稿最後
+                content += f"<br><br><div style='color: red; font-weight: bold;'>{warning_html}</div>"
+
         return f'<pre style="font-family: monospace; white-space: pre-wrap; padding: 20px;">{content}</pre>'
+
     except Exception as e:
         return f'無法載入逐字稿: {str(e)}', 404
-
 
 @app.route('/download/transcript/<path:filepath>')
 def download_transcript(filepath):

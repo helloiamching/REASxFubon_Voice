@@ -1645,8 +1645,10 @@ def process_audio_file(audio_file, original_name=None):
             # Step 5.2: 第三輪檢測（最終確認）
             print(f"\n【最終幻覺檢測】")
             hallucination_ranges_final = detect_hallucination_with_rules(final_segments)
+            #has_audio_quality_issue = False
             if hallucination_ranges_final:
                 print(f"  ⚠ 仍有 {len(hallucination_ranges_final)} 殘留問題段落，可能為音檔品質問題")
+                #has_audio_quality_issue = True
                 for hr in hallucination_ranges_final:
                     print(f"    → 問題段 {hr['start']:.1f}s - {hr['end']:.1f}s，原因: {hr['reason']}")
             else:
@@ -1684,15 +1686,36 @@ def process_audio_file(audio_file, original_name=None):
     print(f"  → 分類結果: {problem_type}")
     print(f"  → 客戶意圖: {intent}")
     
+    # Step 9: 儲存問題原因（改為輸出用）
+    hallucination_issues = []
+    if 'hallucination_ranges_final' in locals() and hallucination_ranges_final:
+        for hr in hallucination_ranges_final:
+            hallucination_issues.append({
+                "start": hr["start"],
+                "end": hr["end"],
+                "reason": hr["reason"]
+            })
 
+    '''
     # Step 9: 儲存問題原因
     if 'hallucination_ranges_final' in locals() and hallucination_ranges_final:
         print(f"【疑似音檔問題段落】")
         for hr in hallucination_ranges_final:
             f.write(f"  - {hr['start']:.1f}s ~ {hr['end']:.1f}s: {hr['reason']}\n")
         print(f"\n⚠ 以上段落可能因雜訊或打碼導致語音辨識不穩。\n")
+    
+    # Step 9: 儲存問題原因
+    if 'hallucination_ranges_final' in locals() and hallucination_ranges_final:
+        print(f"【疑似音檔問題段落】")
+        reason_log_path = text_output_folder / f"{audio_file.stem}_issues.txt"  # 或改成你要儲存的地方
 
+        with open(reason_log_path, "w", encoding="utf-8") as f:
+            for hr in hallucination_ranges_final:
+                print(f"  - {hr['start']:.1f}s ~ {hr['end']:.1f}s: {hr['reason']}")
+                f.write(f"  - {hr['start']:.1f}s ~ {hr['end']:.1f}s: {hr['reason']}\n")
 
+        print(f"\n⚠ 上述段落可能因雜訊或打碼導致語音辨識不穩，已儲存至 {reason_log_path}\n")
+    '''
      # Step 10: 儲存結果
     step9_start = time()
     
@@ -1736,13 +1759,21 @@ def process_audio_file(audio_file, original_name=None):
     print(f"  - 檔案儲存: {step9_time:.2f}秒 ({step9_time / total_time * 100:.1f}%)")
     print(f"已儲存至: {class_folder}/")
     
-    return {
+    result = {
         'file': display_name,
         'time': total_time,
         'class': problem_type,
         'abstract': abstract,
-        'intent': intent
+        'intent': intent,
+        "has_audio_quality_issue": bool(hallucination_issues),
+        "audio_issues": hallucination_issues
     }
+
+    result_file = os.path.join(text_output_folder, f"{base_name}.result.json")
+    with open(result_file, "w", encoding="utf-8") as rf:
+        json.dump(result, rf, ensure_ascii=False, indent=2)
+
+    return result
 
 
 # ========== 主程式 ==========
