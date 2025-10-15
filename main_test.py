@@ -652,6 +652,7 @@ def enhance_audio_for_retranscription(audio_segment):
 
 
 # ========== 檢測並跳過靜默段落 ==========
+
 def detect_and_trim_silence(audio_segment, silence_thresh=-50, min_silence_len=500):
     """
     偵測並移除音訊中的靜音（開頭、結尾和中間明顯靜音）
@@ -731,6 +732,7 @@ def detect_and_trim_silence(audio_segment, silence_thresh=-50, min_silence_len=5
         print(f"      ✓ 原始長度 {duration_ms/1000:.1f}s → 有效長度 {valid_duration:.1f}s")
 
     return merged_audio, valid_duration, has_silence, sound_start, sound_end
+
 # ========== 嘗試移除客服音樂 ==========
 def remove_customer_music(segment_audio, sample_rate=16000):
     """
