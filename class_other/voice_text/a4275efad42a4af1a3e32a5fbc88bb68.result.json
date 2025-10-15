@@ -1,0 +1,9 @@
+{
+  "file": "a4275efad42a4af1a3e32a5fbc88bb68.wav",
+  "time": 195.42482995986938,
+  "class": "其他",
+  "abstract": "對話中提到醫師責任險，客戶詢問與律師事務所的合作及理賠進度，表達對理賠過程的不滿與困惑。",
+  "intent": "諮詢問題",
+  "has_audio_quality_issue": false,
+  "audio_issues": []
+}

@@ -1,0 +1,9 @@
+{
+  "file": "d6299435802e4cdc979122f77bb7f7bd.wav",
+  "time": 351.53885316848755,
+  "class": "其他",
+  "abstract": "客戶詢問醫師責任險的理賠問題，並對律師事務所的合作及理賠進度表示困惑，希望能獲得更清楚的解釋。",
+  "intent": "諮詢問題",
+  "has_audio_quality_issue": false,
+  "audio_issues": []
+}
