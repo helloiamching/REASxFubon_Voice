@@ -760,9 +760,16 @@ def remove_customer_music(segment_audio, sample_rate=16000):
         
         # 重採樣（保證一致）
         y = librosa.resample(samples, orig_sr=segment_audio.frame_rate, target_sr=sample_rate)
+
+        # --- 安全保護：太短不檢測 ---
+        if len(y) < sample_rate * 0.3:
+            print("    ⚠ 音訊太短，略過音樂檢測")
+            return segment_audio
+
+        # --- RMS 與 Mel 頻譜 ---
+        rms = librosa.feature.rms(y=y, frame_length=min(2048, len(y)//2))[0]
         S = librosa.feature.melspectrogram(y=y, sr=sample_rate, n_mels=64)
-        rms = librosa.feature.rms(S=S)[0]
-        
+       
         # 若平均 RMS 太低（整段太安靜），不處理
         if np.mean(rms) < 0.005:
             print(f"    ✓ 平均能量過低，判定無明顯音樂")
@@ -770,6 +777,7 @@ def remove_customer_music(segment_audio, sample_rate=16000):
         
         # 找出音樂段落：RMS 穩定且能量高
         diff = np.abs(np.diff(rms))
+        diff = np.append(diff, diff[-1])  # 補齊長度
         music_mask = (rms > np.mean(rms) * 1.2) & (diff < np.mean(diff) * 0.3)
         music_ratio = np.mean(music_mask)
 
@@ -930,6 +938,7 @@ def retranscribe_hallucination_segments(audio_path, hallucination_ranges, origin
             'prompt': "富邦產險客服。",
             'name': '策略0：無溫度'
         },
+        '''
         {
             'temperature': 0.5,
             'prompt': "富邦產險客服。",
@@ -945,6 +954,7 @@ def retranscribe_hallucination_segments(audio_path, hallucination_ranges, origin
             'prompt': "富邦產險客服。",
             'name': '策略3：低溫度'
         }
+        '''
     ]
     
     for idx, hr in enumerate(hallucination_ranges, 1):
@@ -984,7 +994,8 @@ def retranscribe_hallucination_segments(audio_path, hallucination_ranges, origin
             actual_extract_start = extract_start  # 不需更新時間偏移
             actual_extract_end = extract_start + valid_duration
 
-            _, valid_duration = detect_and_trim_silence(segment_audio)
+            #_, valid_duration = detect_and_trim_silence(segment_audio)
+            processed_audio, valid_duration, has_silence, sound_start, sound_end = detect_and_trim_silence(segment_audio)
             
             # 如果有效音訊太短（<3秒），可能整段都是靜音
             if valid_duration < 3:
