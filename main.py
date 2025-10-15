@@ -414,7 +414,7 @@ def detect_hallucination_with_rules(segments):
                 break
         
         # 如果連續3次以上
-        if consecutive_same >= 3:
+        if consecutive_same >= 2:
             hallucination_ranges.append({
                 'start': segments[i]['start'],
                 'end': segments[i + consecutive_same - 1]['end'],
@@ -789,13 +789,19 @@ def remove_customer_music(segment_audio, sample_rate=16000):
 
         # --- 情況 2：短段音樂片段 ---
         elif 0.05 < music_ratio <= 0.4:
-            music_indices = np.where(music_mask)[0]
-            start_idx = librosa.frames_to_samples(music_indices[0])
-            end_idx = librosa.frames_to_samples(music_indices[-1])
-            start_ms = start_idx / sample_rate * 1000
-            end_ms = end_idx / sample_rate * 1000
-            print(f"    ⚠ 偵測到客服音樂片段 {start_ms/1000:.1f}s–{end_ms/1000:.1f}s，已裁剪")
-            segment_audio = segment_audio[:int(start_ms)] + segment_audio[int(end_ms):]
+            import itertools
+            groups = []
+            for k, g in itertools.groupby(enumerate(music_mask), key=lambda x: x[1]):
+                if k:  # True 表示音樂
+                    indices = [i for i, _ in g]
+                    groups.append((indices[0], indices[-1]))
+            # 找出最長音樂區間
+            if groups:
+                start_idx, end_idx = max(groups, key=lambda x: x[1]-x[0])
+                start_ms = librosa.frames_to_time(start_idx, sr=sample_rate) * 1000
+                end_ms = librosa.frames_to_time(end_idx, sr=sample_rate) * 1000
+                print(f"    ⚠ 偵測到客服音樂片段 {start_ms/1000:.1f}s–{end_ms/1000:.1f}s，已裁剪")
+                segment_audio = segment_audio[:int(start_ms)] + segment_audio[int(end_ms):]
         
         # --- 情況 3：未發現音樂 ---
         else:
@@ -933,28 +939,26 @@ def retranscribe_hallucination_segments(audio_path, hallucination_ranges, origin
     
     # 不同的重試策略
     retry_strategies = [
-        {
-            'temperature': 0,
-            'prompt': "富邦產險客服。",
-            'name': '策略0：無溫度'
-        },
-        '''
-        {
-            'temperature': 0.5,
-            'prompt': "富邦產險客服。",
-            'name': '策略1：標準'
-        },
-        {
-            'temperature': 0.6,
-            'prompt': "富邦產險客服。",
-            'name': '策略2：高溫度'
-        },
-        {
-            'temperature': 0.4,
-            'prompt': "富邦產險客服。",
-            'name': '策略3：低溫度'
-        }
-        '''
+    {
+        'temperature': 0,
+        'prompt': "富邦產險客服。",
+        'name': '策略0：無溫度'
+    }
+    # {
+    #     'temperature': 0.5,
+    #     'prompt': "富邦產險客服。",
+    #     'name': '策略1：標準'
+    # },
+    # {
+    #     'temperature': 0.6,
+    #     'prompt': "富邦產險客服。",
+    #     'name': '策略2：高溫度'
+    # },
+    # {
+    #     'temperature': 0.4,
+    #     'prompt': "富邦產險客服。",
+    #     'name': '策略3：低溫度'
+    # }
     ]
     
     for idx, hr in enumerate(hallucination_ranges, 1):
@@ -1051,6 +1055,7 @@ def retranscribe_hallucination_segments(audio_path, hallucination_ranges, origin
                     
                     # 如果片段過長（超過90秒），拆分處理
                     if segment_duration > 90:
+                        print(f"      ⚠ 片段過長（{segment_duration:.1f}秒 > 90秒），需要拆分處理")
                         print(f"      → 拆分成60秒片段處理...")
                         
                         chunk_duration = 60
